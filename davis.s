@@ -1,59 +1,46 @@
 @=============================================================================
-@ File:        davis.s
-@ Class:       CS 413-02
-@ Term:        Fall 2026
-@ Author:      Aaron Davis
-@ Email:       amd0047@uah.edu
-@ Date:        October 7, 2026
+@ File:    davis.s
+@ Class:   CS 413-02
+@ Term:    Fall 2026
+@ Author:  Aaron Davis
+@ Email:   amd0047@uah.edu
+@ Date:    October 7, 2026
 @
-@-----------------------------------------------------------------------------
-@ PURPOSE OF SOFTWARE
-@-----------------------------------------------------------------------------
-@ This program simulates a single serve coffee machine of the kind sold under
-@ the Keurig name.  The machine starts with a full 48 ounce water reservoir.
+@ Purpose: Simulates a single serve coffee machine like a Keurig.
 @
-@ The user is shown a welcome message and presses B to begin brewing or T to
-@ turn the machine off.  After pressing B the user picks a cup size:
+@          The machine starts with a full 48 oz water reservoir.  The user
+@          presses B to start a cup or T to turn the machine off, then picks
+@          a cup size:
 @
-@       Small    6 ounces
-@       Medium   8 ounces
-@       Large   10 ounces
+@              Small    6 oz
+@              Medium   8 oz
+@              Large   10 oz
 @
-@ The machine then checks the reservoir.  If there is not enough water left
-@ for the size that was picked, an error is shown and the user is asked for a
-@ smaller size.  If there is enough water the machine reports that it is ready
-@ to brew, asks for a cup to be placed in the tray and waits for B to be
-@ pressed again before dispensing.
+@          If there is not enough water left for the size that was picked the
+@          program says so and asks for a smaller size.  Otherwise it says it
+@          is ready to brew, asks for a cup in the tray, and waits for B to be
+@          pressed again before pouring.
 @
-@ After every cup the reservoir is checked.  Once it falls below 6 ounces, the
-@ smallest cup the machine can make, a refill message is shown and the machine
-@ turns itself off.
+@          After each cup the water is checked.  Once it drops below 6 oz the
+@          machine cannot make even a small cup, so it prints a refill message
+@          and shuts off.
 @
-@ A hidden code may be typed at ANY prompt.  It reports how much water is left
-@ and how many cups of each size have been made since the machine was started.
-@ The code is the word COFFEE and is not mentioned in any of the menus, which
-@ is what makes it hidden.
+@          Typing COFFEE at any prompt shows how much water is left and how
+@          many cups of each size have been made.  It is not listed in any of
+@          the menus, which is what makes it the hidden code.
 @
-@-----------------------------------------------------------------------------
-@ BUILD / RUN / DEBUG COMMANDS
-@-----------------------------------------------------------------------------
-@   Assemble:  as -g -o davis.o davis.s
-@   Link:      gcc -o davis davis.o
-@   Run:       ./davis
-@   Debug:     gdb ./davis
-@
+@ Assemble: as -g -o davis.o davis.s
+@ Link:     gcc -o davis davis.o
+@ Run:      ./davis
+@ Debug:    gdb ./davis
 @=============================================================================
 
-@-----------------------------------------------------------------------------
-@ MACHINE CONSTANTS
-@ These are gathered here so the capacity of the machine and the cup sizes can
-@ be changed in one place instead of being scattered through the code.
-@-----------------------------------------------------------------------------
-        .equ    RESERVOIR_OZ, 48        @ a full reservoir
-        .equ    SMALL_OZ,      6        @ also the shut off level, because the
-        .equ    MEDIUM_OZ,     8        @ machine cannot make anything smaller
-        .equ    LARGE_OZ,     10        @ than a small cup
-        .equ    BUFSZ,        64        @ room for one typed line
+@ Machine sizes.  Kept together so they are easy to find and change.
+        .equ    RESERVOIR_OZ, 48
+        .equ    SMALL_OZ,      6
+        .equ    MEDIUM_OZ,     8
+        .equ    LARGE_OZ,     10
+        .equ    BUFSZ,        64        @ one line of typing
 
         .global main
         .text
@@ -61,320 +48,336 @@
 @=============================================================================
 @ main
 @
-@ The machine state is kept in the callee saved registers so that it survives
-@ every call to printf and fgets without having to be written back to memory:
+@ Registers r4 to r8 hold the machine state.  They are used because the C
+@ library has to leave them alone, so printf and fgets cannot wipe them out.
 @
-@       r4 = ounces of water left in the reservoir
-@       r5 = number of small cups dispensed
-@       r6 = number of medium cups dispensed
-@       r7 = number of large cups dispensed
-@       r8 = size in ounces of the cup the user is currently ordering
+@   r4 = oz of water left
+@   r5 = small cups made
+@   r6 = medium cups made
+@   r7 = large cups made
+@   r8 = size of the cup being ordered right now
 @=============================================================================
 main:
-        push    {r4-r12, lr}            @ save registers for the C library;
-                                        @ 10 registers keeps sp 8-byte aligned
+        push    {r4-r12, lr}            @ 10 registers keeps sp 8 byte aligned
 
-        mov     r4, #RESERVOIR_OZ       @ the reservoir is filled at startup
-        mov     r5, #0                  @ no cups have been made yet
+        mov     r4, #RESERVOIR_OZ       @ reservoir starts full
+        mov     r5, #0
         mov     r6, #0
         mov     r7, #0
 
 @-----------------------------------------------------------------------------
-@ welcomeLoop - the machine sits here between cups waiting to be started.
-@ One pass per key the user presses.  The loop repeats rather than falls
-@ through when the hidden code is typed or the key is not one we recognize,
-@ so the welcome message is always on screen when input is expected.
+@ welcomeLoop
+@ Where the machine waits between cups.  One pass per key typed.  It loops
+@ back instead of falling through so the welcome message is always on the
+@ screen when we are asking for input.
 @-----------------------------------------------------------------------------
 welcomeLoop:
         ldr     r0, =welcomeMsg
         bl      printf
 
-        bl      getCommand              @ r0 = status, r1 = key pressed
-        cmn     r0, #1                  @ input ended, treat it as power off
-        beq     machineOff
-        cmp     r0, #1                  @ hidden code was handled for us, so
-        beq     welcomeLoop             @ just show the welcome again
+        bl      getCommand              @ r0 = the key that was pressed
+        cmp     r0, #0                  @ 0 means the hidden code was typed
+        beq     welcomeLoop             @ and already handled
 
-        cmp     r1, #'B'                @ B begins a cup of coffee
+        cmp     r0, #'B'
         beq     sizeLoop
-        cmp     r1, #'T'                @ T turns the machine off
+        cmp     r0, #'T'
         beq     machineOff
 
-        ldr     r0, =errWelcomeMsg      @ error check: any other key is not a
-        bl      printf                  @ machine control, so say so and wait
+        ldr     r0, =errWelcomeMsg      @ error check: not B and not T
+        bl      printf
         b       welcomeLoop
 
 @-----------------------------------------------------------------------------
-@ sizeLoop - ask which cup size the user wants.
-@ This is also where we come back to after telling the user there is not
-@ enough water left, which is how the handout asks for a smaller size to be
-@ offered rather than cancelling the order outright.
+@ sizeLoop
+@ Asks which size the user wants.  We also come back here after telling the
+@ user there is not enough water, because the lab says to let them pick a
+@ smaller cup instead of cancelling the order.
 @-----------------------------------------------------------------------------
 sizeLoop:
         ldr     r0, =sizeMsg
         bl      printf
 
         bl      getCommand
-        cmn     r0, #1
-        beq     machineOff
-        cmp     r0, #1
+        cmp     r0, #0
         beq     sizeLoop
 
-        cmp     r1, #'S'                @ translate the key into the number of
-        moveq   r8, #SMALL_OZ           @ ounces that size will cost us, which
-        beq     checkWater              @ is all the rest of the code needs
-        cmp     r1, #'M'
-        moveq   r8, #MEDIUM_OZ
-        beq     checkWater
-        cmp     r1, #'L'
-        moveq   r8, #LARGE_OZ
-        beq     checkWater
-        cmp     r1, #'T'                @ let the user quit from here too so
-        beq     machineOff              @ they are never trapped at a prompt
+        cmp     r0, #'S'
+        beq     pickSmall
+        cmp     r0, #'M'
+        beq     pickMedium
+        cmp     r0, #'L'
+        beq     pickLarge
+        cmp     r0, #'T'                @ let them quit from here too so they
+        beq     machineOff              @ are not stuck at this prompt
 
-        ldr     r0, =errSizeMsg         @ error check: not one of the three
-        bl      printf                  @ sizes the machine can pour
+        ldr     r0, =errSizeMsg         @ error check: not S, M or L
+        bl      printf
         b       sizeLoop
 
+@ Turn the key into a number of ounces.  That is the only thing the rest of
+@ the program needs to know about the size.
+pickSmall:
+        mov     r8, #SMALL_OZ
+        b       checkWater
+
+pickMedium:
+        mov     r8, #MEDIUM_OZ
+        b       checkWater
+
+pickLarge:
+        mov     r8, #LARGE_OZ
+        b       checkWater
+
 @-----------------------------------------------------------------------------
-@ checkWater - make sure the reservoir can cover the size that was ordered.
-@ Both values are small positive counts, so an unsigned compare is safe.
+@ checkWater
+@ Make sure the reservoir can cover the size that was ordered.
 @-----------------------------------------------------------------------------
 checkWater:
         cmp     r4, r8
-        blo     notEnough               @ less water than this cup needs
+        blt     notEnough               @ less water left than this cup needs
 
-        ldr     r0, =readyMsg           @ enough water, so walk the user
-        bl      printf                  @ through placing a cup and starting
+        ldr     r0, =readyMsg
+        bl      printf
 
 @-----------------------------------------------------------------------------
-@ brewLoop - wait for B to actually start the brew.
-@ The order is already accepted at this point, so nothing here changes the
-@ water level; we only loop until a valid key arrives.
+@ brewLoop
+@ Wait for B to actually start the brew.  The order is already taken, so
+@ nothing in here changes the water level.
 @-----------------------------------------------------------------------------
 brewLoop:
         bl      getCommand
-        cmn     r0, #1
-        beq     machineOff
-        cmp     r0, #1
-        beq     brewPrompt              @ hidden code: reprint what we want
+        cmp     r0, #0
+        beq     brewPrompt              @ hidden code pushed our message up
 
-        cmp     r1, #'B'                @ B starts the brew
+        cmp     r0, #'B'
         beq     dispense
-        cmp     r1, #'T'
+        cmp     r0, #'T'
         beq     machineOff
 
         ldr     r0, =errBrewMsg         @ error check: the machine is loaded
-        bl      printf                  @ and waiting, it only accepts B here
+        bl      printf                  @ and only takes B here
         b       brewLoop
 
-@ brewPrompt - repeat the start instruction after the status report scrolled
-@ it off the screen, so the user still knows what the machine is waiting for.
+@ Print the start instruction again after the status report scrolled it off,
+@ otherwise the user is left guessing what we want.
 brewPrompt:
         ldr     r0, =pressBrewMsg
         bl      printf
         b       brewLoop
 
 @-----------------------------------------------------------------------------
-@ notEnough - the reservoir cannot cover the size that was ordered.
-@ The handout asks that the user be allowed to pick a smaller cup instead of
-@ the machine giving up, so this returns to the size prompt.
+@ notEnough
+@ Not enough water for that size, so say how much is left and go back to the
+@ size prompt.
 @-----------------------------------------------------------------------------
 notEnough:
         ldr     r0, =errWaterMsg
-        mov     r1, r4                  @ show what is actually left so the
-        bl      printf                  @ user can pick a size that will fit
+        mov     r1, r4
+        bl      printf
         b       sizeLoop
 
 @-----------------------------------------------------------------------------
-@ dispense - pour the cup and update the machine state.
-@ The size in r8 tells us both how much water to take and which counter to
-@ add to, so the conditional adds below need no branches.
+@ dispense
+@ Pour the cup, take the water out of the reservoir and add one to the
+@ counter for that size.
 @-----------------------------------------------------------------------------
 dispense:
-        sub     r4, r4, r8              @ take the water out of the reservoir
+        sub     r4, r4, r8
 
         cmp     r8, #SMALL_OZ
-        addeq   r5, r5, #1
+        beq     countSmall
         cmp     r8, #MEDIUM_OZ
-        addeq   r6, r6, #1
-        cmp     r8, #LARGE_OZ
-        addeq   r7, r7, #1
+        beq     countMedium
+        add     r7, r7, #1              @ only large is left
+        b       counted
 
+countSmall:
+        add     r5, r5, #1
+        b       counted
+
+countMedium:
+        add     r6, r6, #1
+
+counted:
         ldr     r0, =dispensedMsg
         bl      printf
 
-        cmp     r4, #SMALL_OZ           @ the handout asks for this check after
-        blo     needRefill              @ EVERY cup, not just when empty
+        cmp     r4, #SMALL_OZ           @ the lab wants this checked after
+        blt     needRefill              @ every cup, not just when it is empty
         b       welcomeLoop
 
-@-----------------------------------------------------------------------------
-@ needRefill - too little water left for even the smallest cup, so the machine
-@ cannot serve anyone else until a person refills it.
-@-----------------------------------------------------------------------------
+@ Not enough left for even a small cup, so a person has to refill it.
 needRefill:
         ldr     r0, =refillMsg
         mov     r1, r4
         bl      printf
         b       exitProgram
 
-@ machineOff - normal power off, reached from T at any prompt or from the end
-@ of the input stream.
+@ Normal power off.  Reached from T or from running out of input.
 machineOff:
         ldr     r0, =offMsg
         bl      printf
 
-@ exitProgram - hand control back to the operating system.
 exitProgram:
         mov     r0, #0
         pop     {r4-r12, pc}
 
 
 @=============================================================================
-@ SUBROUTINES
+@ Subroutines
 @=============================================================================
 
 @-----------------------------------------------------------------------------
-@ getCommand - read one typed line and turn it into a single command key.
+@ getCommand
+@ Reads one line and returns the single key that was typed.
 @
-@ Every prompt in the program reads input through this one subroutine.  That
-@ is deliberate: it is the reason the hidden code works at any prompt without
-@ each prompt having to test for it.
+@ Every prompt reads through this one subroutine.  That is why the hidden
+@ code works everywhere without each prompt having to check for it.
 @
-@ Returns:
-@       r0 = -1  the input stream ended; the caller should power the machine
-@                off instead of looping forever on an empty read
-@       r0 =  1  the line was the hidden code and the report has already been
-@                printed; the caller should prompt again
-@       r0 =  0  a command was entered and r1 holds it:
-@                  r1 = the key, as an uppercase character
-@                  r1 = 0 when the line was not exactly one character, which
-@                       the caller reports with its own error message
+@ Returns in r0:
+@   0           the hidden code was typed, the report is already printed and
+@               the caller should just ask again
+@   1           more than one character or nothing was typed, which no prompt
+@               accepts, so the caller falls through to its own error
+@   a character the key that was pressed, in upper case
 @
-@ Only r0-r3 are used for working values so the machine state in r4-r8 is
-@ untouched.
+@ Running out of input returns 'T' so the machine shuts off normally instead
+@ of looping forever on an empty read.
 @-----------------------------------------------------------------------------
 getCommand:
-        push    {r4, lr}                @ two registers keeps sp 8-byte aligned
+        push    {r4, lr}                @ 2 registers keeps sp 8 byte aligned
 
         ldr     r0, =inBuf              @ fgets(inBuf, BUFSZ, stdin)
         mov     r1, #BUFSZ
         ldr     r2, =stdin
         ldr     r2, [r2]
         bl      fgets
-        cmp     r0, #0                  @ error check: NULL means there is no
-        beq     cmdEndOfInput           @ more input coming, ever
+        cmp     r0, #0                  @ NULL means no more input is coming
+        beq     gotEndOfInput
 
-        bl      trimAndUpper            @ tidy the line before looking at it
+        bl      trimAndUpper
 
         ldr     r0, =inBuf              @ is this the hidden code?
         ldr     r1, =hiddenCode
         bl      strEquals
+        cmp     r0, #1
+        beq     gotHidden
+
+        ldr     r2, =inBuf
+        ldrb    r0, [r2]                @ the key they pressed
         cmp     r0, #0
-        bne     cmdHidden
+        beq     gotBadEntry             @ they just hit enter
+        ldrb    r1, [r2, #1]            @ a command is one character and then
+        cmp     r1, #0                  @ the end of the line
+        bne     gotBadEntry
 
-        ldr     r0, =inBuf              @ a command is one character and then
-        ldrb    r1, [r0]                @ the end of the line.  Anything longer
-        ldrb    r2, [r0, #1]            @ is a typing mistake, so r1 is cleared
-        cmp     r2, #0                  @ and the caller reports it.
-        movne   r1, #0
+        pop     {r4, pc}
 
+gotHidden:
+        bl      showStatus
         mov     r0, #0
         pop     {r4, pc}
 
-@ cmdHidden - the hidden code was entered, so report and tell the caller to
-@ prompt again rather than treating the code as a command.
-cmdHidden:
-        bl      showStatus
+gotBadEntry:
         mov     r0, #1
-        mov     r1, #0
         pop     {r4, pc}
 
-@ cmdEndOfInput - report the end of input through r0.  This must NOT jump
-@ straight to the exit in main, because this subroutine's own frame is still
-@ on the stack and main's POP would restore the wrong registers.
-cmdEndOfInput:
-        mvn     r0, #0                  @ r0 = -1
-        mov     r1, #0
+@ Do not branch straight to exitProgram from here.  This subroutine still has
+@ its own frame on the stack, so main would pop the wrong registers.  Return
+@ 'T' and let main shut down the normal way.
+gotEndOfInput:
+        mov     r0, #'T'
         pop     {r4, pc}
 
 @-----------------------------------------------------------------------------
-@ trimAndUpper - clean up the line sitting in inBuf, in place.
-@ The newline that fgets keeps is cut off, and lowercase letters are folded to
-@ uppercase so a user who types b or coffee is treated the same as one who
-@ types B or COFFEE.
+@ trimAndUpper
+@ Cleans up the line in inBuf.  Cuts off the newline that fgets leaves on the
+@ end and changes lower case to upper case, so b and coffee work the same as
+@ B and COFFEE.
 @
-@ r0 walks the buffer, r1 holds the character being looked at.
+@   r0 = address of inBuf
+@   r1 = how far along the line we are
+@   r2 = character being looked at
 @-----------------------------------------------------------------------------
 trimAndUpper:
         ldr     r0, =inBuf
+        mov     r1, #0
 
-@ trimLoop - one character per pass until the line ends.
+@ One character per pass.
 trimLoop:
-        ldrb    r1, [r0]
-        cmp     r1, #0                  @ end of the string
+        ldrb    r2, [r0, r1]
+        cmp     r2, #0                  @ end of the string
         beq     trimDone
-        cmp     r1, #10                 @ newline ends the line
+        cmp     r2, #10                 @ newline
         beq     trimCut
-        cmp     r1, #13                 @ carriage return ends the line too,
-        beq     trimCut                 @ so files with CRLF still work
+        cmp     r2, #13                 @ carriage return, in case the input
+        beq     trimCut                 @ came from a Windows file
 
-        cmp     r1, #'a'                @ fold lowercase to uppercase by
-        blo     trimNext                @ clearing the 0x20 bit
-        cmp     r1, #'z'
-        bhi     trimNext
-        sub     r1, r1, #32
-        strb    r1, [r0]
+        cmp     r2, #'a'
+        blt     trimNext
+        cmp     r2, #'z'
+        bgt     trimNext
+        sub     r2, r2, #32             @ 'a' - 'A' is 32
+        strb    r2, [r0, r1]
 
 trimNext:
-        add     r0, r0, #1
+        add     r1, r1, #1
         b       trimLoop
 
-@ trimCut - replace the line ending with a terminator so the rest of the
-@ program sees a plain string.
+@ Write a 0 over the line ending so the rest of the program sees a normal
+@ string.
 trimCut:
-        mov     r1, #0
-        strb    r1, [r0]
+        mov     r2, #0
+        strb    r2, [r0, r1]
 
 trimDone:
         bx      lr
 
 @-----------------------------------------------------------------------------
-@ strEquals - compare two zero terminated strings.
-@       r0 = address of the first string
-@       r1 = address of the second string
-@ Returns r0 = 1 when they match and r0 = 0 when they do not.
+@ strEquals
+@ Compares two strings that end in 0.
+@   r0 = first string
+@   r1 = second string
+@ Returns r0 = 1 if they match, 0 if they do not.
 @
-@ r2 and r3 hold the pair of characters being compared.
+@   r2 = position in both strings
+@   r3 and r4 = the two characters being compared
 @-----------------------------------------------------------------------------
 strEquals:
+        push    {r4, lr}
+        mov     r2, #0
 
-@ eqLoop - one character from each string per pass.
+@ One character from each string per pass.
 eqLoop:
-        ldrb    r2, [r0], #1
-        ldrb    r3, [r1], #1
-        cmp     r2, r3
-        bne     eqNo                    @ a difference means no match
-        cmp     r2, #0                  @ both ended at the same place, so
-        bne     eqLoop                  @ the strings are equal
+        ldrb    r3, [r0, r2]
+        ldrb    r4, [r1, r2]
+        cmp     r3, r4
+        bne     eqNo                    @ characters differ, so no match
+        cmp     r3, #0                  @ both ended in the same place, so
+        beq     eqYes                   @ the strings are the same
+        add     r2, r2, #1
+        b       eqLoop
 
+eqYes:
         mov     r0, #1
-        bx      lr
+        pop     {r4, pc}
 
 eqNo:
         mov     r0, #0
-        bx      lr
+        pop     {r4, pc}
 
 @-----------------------------------------------------------------------------
-@ showStatus - print the hidden code report.
+@ showStatus
+@ Prints the hidden code report.
 @
-@ printf only takes three values in r1-r3, and these four lines each carry
-@ their own label anyway, so the report is printed one line per call.
-@ The counters live in r4-r7, which printf is required to preserve, so they
-@ are still correct between the calls.
+@ printf only takes 3 values in r1 to r3 and each of these lines has its own
+@ label anyway, so it is easier to print one line at a time.  The counters are
+@ in r4 to r7, which printf has to leave alone, so they are still good between
+@ the calls.
 @-----------------------------------------------------------------------------
 showStatus:
-        push    {r8, lr}                @ two registers keeps sp 8-byte aligned
+        push    {r4, lr}
 
         ldr     r0, =waterMsg
         mov     r1, r4
@@ -389,18 +392,18 @@ showStatus:
         mov     r1, r7
         bl      printf
 
-        pop     {r8, pc}
+        pop     {r4, pc}
 
 
 @=============================================================================
-@ DATA
-@ Every string the program can print is defined here rather than being built
-@ in the code, so the wording can be changed without touching the logic.
+@ Data
+@ Every string the program prints is down here instead of being built in the
+@ code, so the wording can be changed without touching the logic.
 @=============================================================================
         .data
 
-@ The hidden code.  It is only ever compared against, never printed, so the
-@ user has no way to discover it from the menus.
+@ The hidden code.  It is only ever compared against, never printed, so there
+@ is no way to find it from the menus.
 hiddenCode:     .asciz  "COFFEE"
 
 welcomeMsg:
@@ -419,8 +422,6 @@ readyMsg:
         .ascii  "Place cup in tray\n"
         .asciz  "Press B (and enter) to start brewing.\n\n> "
 
-@ Printed on its own when the status report has pushed the ready message out
-@ of sight, so the user is not left guessing.
 pressBrewMsg:   .asciz  "\nPress B (and enter) to start brewing.\n\n> "
 
 dispensedMsg:   .asciz  "\nCoffee has been dispensed\n"
@@ -431,8 +432,8 @@ smallMsg:       .asciz  "Small: %d\n"
 mediumMsg:      .asciz  "Medium: %d\n"
 largeMsg:       .asciz  "Large: %d\n"
 
-@ Error messages.  Each prompt has its own so the user is told what is valid
-@ where they actually are, instead of getting one vague complaint.
+@ Each prompt gets its own error message so the user is told what works where
+@ they actually are.
 errWelcomeMsg:  .asciz  "\nThat is not a valid choice. Press B to begin or T to turn the machine off.\n"
 errSizeMsg:     .asciz  "\nThat is not a valid cup size. Enter S, M or L.\n"
 errBrewMsg:     .asciz  "\nThe machine is waiting to brew. Press B to start.\n"
